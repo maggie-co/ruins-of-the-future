@@ -1,0 +1,18 @@
+{
+  "name": "ruins-of-the-future",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dbffile": "^1.12.0",
+    "proj4": "^2.20.9",
+    "shapefile": "^0.6.6"
+  },
+  "type": "module"
+}
