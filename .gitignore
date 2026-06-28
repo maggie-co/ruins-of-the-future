@@ -2,5 +2,6 @@ node_modules/
 data-raw/
 data-processed/
 public/tiles/
+app/public/tiles/
 .DS_Store
 .env
