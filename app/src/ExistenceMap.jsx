@@ -8,29 +8,51 @@ const YEAR_MIN = 1810;
 const YEAR_MAX = 2026;
 const THIS_YEAR = new Date().getFullYear();
 
+const INFO_DESCRIPTIONS = {
+  built: 'Year of construction from the city assessor parcel records (par.dbf, field YRBUILT). Age is measured from the current year.',
+  use: 'Land use classification from the assessor parcel file, describing the building\'s primary function: residential, commercial, industrial, institutional, or mixed.',
+  vacant: 'Year the structure first appears in the city Vacant Building registry. Absent when there is no recorded vacancy. Source: City of St. Louis vacant building data.',
+  assessed: 'Assessed value of improvements only, the structure itself excluding land, in dollars. Source: par.dbf, field ASMTIMPROV.',
+};
+
 export default function ExistenceMap() {
   const mapContainer = useRef(null);
   const mapRef = useRef(null);
-  const [yearRange, setYearRange] = useState([YEAR_MIN, YEAR_MAX]);
-  const yearRangeRef = useRef([YEAR_MIN, YEAR_MAX]);
+  const selectedHandleRef = useRef('');
+
+  const [selectedBuilding, setSelectedBuilding] = useState(null);
+  const [hoveredBuilding, setHoveredBuilding] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchStatus, setSearchStatus] = useState('');
-  const [hoveredBuilding, setHoveredBuilding] = useState(null);
+  const [infoTooltip, setInfoTooltip] = useState(null);
+
+  const [yearRange, setYearRange] = useState([YEAR_MIN, YEAR_MAX]);
+  const yearRangeRef = useRef([YEAR_MIN, YEAR_MAX]);
+
+  const displayBuilding = selectedBuilding || hoveredBuilding;
 
   const applyYearFilter = useCallback((range) => {
     const map = mapRef.current;
     if (!map || !map.getLayer('buildings-existence')) return;
-    map.setFilter('buildings-existence', [
+    const yearFilter = [
       'all',
       ['>=', ['get', 'yearBuilt'], range[0]],
       ['<=', ['get', 'yearBuilt'], range[1]],
-    ]);
+    ];
+    map.setFilter('buildings-existence', yearFilter);
+    if (map.getLayer('buildings-selected')) {
+      map.setFilter('buildings-selected',
+        selectedHandleRef.current
+          ? ['all', yearFilter, ['==', ['get', 'handle'], selectedHandleRef.current]]
+          : ['==', ['get', 'handle'], '']
+      );
+    }
   }, []);
 
   const handleSearch = useCallback(async (e) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
-    setSearchStatus('Searching…');
+    setSearchStatus('Searching...');
     try {
       const q = encodeURIComponent(searchQuery + ', St. Louis, MO');
       const res = await fetch(
@@ -87,13 +109,30 @@ export default function ExistenceMap() {
                 2000, '#a85a2a',
                 2026, '#4a2818',
               ],
-              'fill-opacity': 0.85,
+              'fill-opacity': [
+                'interpolate', ['linear'], ['zoom'],
+                10, 1.0,
+                13, 0.92,
+                15, 0.85,
+              ],
+            },
+          },
+          {
+            id: 'buildings-selected',
+            type: 'line',
+            source: 'buildings',
+            'source-layer': 'buildings',
+            filter: ['==', ['get', 'handle'], ''],
+            paint: {
+              'line-color': '#fff8ee',
+              'line-width': 2,
+              'line-opacity': 0.9,
             },
           },
         ],
       },
       center: [-90.22, 38.63],
-      zoom: 11,
+      zoom: 12,
       minZoom: 10,
       maxZoom: 15,
     });
@@ -107,16 +146,7 @@ export default function ExistenceMap() {
 
     map.on('mousemove', 'buildings-existence', (e) => {
       map.getCanvas().style.cursor = 'pointer';
-      const p = e.features[0].properties;
-      setHoveredBuilding({
-        address: p.address || null,
-        yearBuilt: p.yearBuilt || null,
-        age: p.yearBuilt ? THIS_YEAR - p.yearBuilt : null,
-        neighborhood: p.neighborhood || null,
-        landUse: p.landUse || null,
-        vacantBldgYear: p.vacantBldgYear || null,
-        assessedImprov: p.assessedImprov || null,
-      });
+      setHoveredBuilding(e.features[0].properties);
     });
 
     map.on('mouseleave', 'buildings-existence', () => {
@@ -124,9 +154,33 @@ export default function ExistenceMap() {
       setHoveredBuilding(null);
     });
 
+    map.on('click', 'buildings-existence', (e) => {
+      const p = e.features[0].properties;
+      if (selectedHandleRef.current === p.handle) {
+        selectedHandleRef.current = '';
+        setSelectedBuilding(null);
+        applyYearFilter(yearRangeRef.current);
+      } else {
+        selectedHandleRef.current = p.handle;
+        setSelectedBuilding(p);
+        applyYearFilter(yearRangeRef.current);
+        map.flyTo({ center: e.lngLat, zoom: Math.max(map.getZoom(), 16), duration: 1000, essential: true });
+      }
+    });
+
+    map.on('click', (e) => {
+      const features = map.queryRenderedFeatures(e.point, { layers: ['buildings-existence'] });
+      if (!features.length) {
+        selectedHandleRef.current = '';
+        setSelectedBuilding(null);
+        if (map.getLayer('buildings-selected')) {
+          map.setFilter('buildings-selected', ['==', ['get', 'handle'], '']);
+        }
+      }
+    });
+
     return () => {
       map.remove();
-      maplibregl.removeProtocol('pmtiles');
     };
   }, [applyYearFilter]);
 
@@ -140,7 +194,6 @@ export default function ExistenceMap() {
     applyYearFilter(next);
   };
 
-  // Slider track gradient fill percentages
   const minPct = ((yearRange[0] - YEAR_MIN) / (YEAR_MAX - YEAR_MIN)) * 100;
   const maxPct = ((yearRange[1] - YEAR_MIN) / (YEAR_MAX - YEAR_MIN)) * 100;
 
@@ -152,6 +205,38 @@ export default function ExistenceMap() {
     color: '#f4ead5',
   };
 
+  const InfoLabel = ({ text, tipKey, style }) => (
+    <div
+      style={{ position: 'relative', display: 'inline-block', cursor: 'help', ...style }}
+      onMouseEnter={() => setInfoTooltip(tipKey)}
+      onMouseLeave={() => setInfoTooltip(null)}
+    >
+      <span style={{
+        fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase',
+        color: 'rgba(244,234,213,0.45)',
+        borderBottom: '1px dotted rgba(244,234,213,0.25)',
+      }}>
+        {text}
+      </span> 
+      {infoTooltip === tipKey && (
+        <div style={{
+          // in InfoLabel, tooltip div style:
+          position: 'absolute', top: 'calc(100% + 6px)',
+          right: -40, left: 'auto',
+          width: 220, background: 'rgba(10,8,6,0.97)',
+          border: '1px solid rgba(244,234,213,0.15)',
+          borderRadius: 3, padding: '10px 12px',
+          fontSize: 11, color: 'rgba(244,234,213,0.78)',
+          lineHeight: 1.6, zIndex: 200, pointerEvents: 'none', zoom: 1.25,
+        }}>
+          {INFO_DESCRIPTIONS[tipKey]}
+        </div>
+      )}
+    </div>
+  );
+
+  const isLocked = !!selectedBuilding;
+
   return (
     <div style={{ position: 'fixed', inset: 0, animation: 'fadeIn 0.8s ease-out' }}>
       <style>{`
@@ -160,87 +245,45 @@ export default function ExistenceMap() {
           from { opacity: 0; transform: translateY(6px); }
           to   { opacity: 1; transform: translateY(0); }
         }
-
         .search-input {
-          background: transparent;
-          border: none;
-          outline: none;
-          color: #f4ead5;
-          font-size: 13px;
-          font-family: inherit;
-          width: 200px;
-          letter-spacing: 0.02em;
+          background: transparent; border: none; outline: none;
+          color: #f4ead5; font-size: 13px; font-family: inherit;
+          width: 200px; letter-spacing: 0.02em;
         }
         .search-input::placeholder { color: rgba(244, 234, 213, 0.35); }
-        .search-btn {
-          background: none;
-          border: none;
-          color: rgba(244, 234, 213, 0.45);
-          cursor: pointer;
-          padding: 0 0 0 8px;
-          font-size: 15px;
-          transition: color 0.2s;
-          line-height: 1;
+        .e-info-value {
+          font-size: 13px; color: rgba(244,234,213,0.9);
+          text-align: right; max-width: 160px;
         }
-        .search-btn:hover { color: #f4ead5; }
-
-        /* Slider base */
+        .info-divider {
+          border: none; border-top: 1px solid rgba(244, 234, 213, 0.08); margin: 8px 0;
+        }
+        .locked-indicator {
+          position: absolute; top: 8px; right: 10px;
+          font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+          color: rgba(244,234,213,0.5);
+        }
         .year-slider {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 100%;
-          height: 2px;
-          background: transparent;
-          outline: none;
-          cursor: pointer;
-          position: absolute;
-          left: 0;
-          pointer-events: none;
+          -webkit-appearance: none; appearance: none;
+          width: 100%; height: 2px; background: transparent;
+          outline: none; cursor: pointer; position: absolute;
+          left: 0; pointer-events: none;
         }
         .year-slider::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 14px;
-          height: 14px;
-          border-radius: 50%;
-          background: #f4ead5;
-          border: 2px solid rgba(237, 148, 85, 0.9);
-          cursor: pointer;
-          pointer-events: all;
+          -webkit-appearance: none; appearance: none;
+          width: 14px; height: 14px; border-radius: 50%;
+          background: #f4ead5; border: 2px solid rgba(237, 148, 85, 0.9);
+          cursor: pointer; pointer-events: all;
           transition: transform 0.15s ease, background 0.15s ease;
           box-shadow: 0 0 6px rgba(237, 148, 85, 0.5);
         }
         .year-slider::-webkit-slider-thumb:hover {
-          transform: scale(1.25);
-          background: #fff8ee;
+          transform: scale(1.25); background: #fff8ee;
         }
         .year-slider::-moz-range-thumb {
-          width: 14px;
-          height: 14px;
-          border-radius: 50%;
-          background: #f4ead5;
-          border: 2px solid rgba(237, 148, 85, 0.9);
-          cursor: pointer;
-          pointer-events: all;
-        }
-
-        .info-row { display: flex; justify-content: space-between; align-items: baseline; }
-        .info-label {
-          font-size: 10px;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          color: rgba(244, 234, 213, 0.4);
-        }
-        .info-value {
-          font-size: 13px;
-          color: rgba(244, 234, 213, 0.88);
-          text-align: right;
-          max-width: 160px;
-        }
-        .info-divider {
-          border: none;
-          border-top: 1px solid rgba(244, 234, 213, 0.08);
-          margin: 8px 0;
+          width: 14px; height: 14px; border-radius: 50%;
+          background: #f4ead5; border: 2px solid rgba(237, 148, 85, 0.9);
+          cursor: pointer; pointer-events: all;
         }
       `}</style>
 
@@ -248,119 +291,95 @@ export default function ExistenceMap() {
 
       {/* Back */}
       <Link to="/" className="back-btn" style={{
-        ...glass,
-        position: 'absolute',
-        top: 20, left: 20,
-        padding: '9px 16px',
-        fontSize: 11,
-        letterSpacing: '0.14em',
-        textTransform: 'uppercase',
-        color: 'rgba(244,234,213,0.6)',
-        textDecoration: 'none',
-        display: 'block',
+        ...glass, position: 'absolute', top: 20, left: 20,
+        padding: '9px 16px', fontSize: 11, letterSpacing: '0.14em',
+        textTransform: 'uppercase', color: 'rgba(244,234,213,0.7)',
+        textDecoration: 'none', display: 'block', zoom: 1.25,
       }}>
-        ← Back
+        Back
       </Link>
 
       {/* Search */}
       <form onSubmit={handleSearch} style={{
-        ...glass,
-        position: 'absolute',
-        top: 20,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        padding: '10px 16px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        minWidth: 300,
-        zIndex: 10,
+        ...glass, position: 'absolute', top: 20, left: '50%',
+        transform: 'translateX(-50%)', padding: '10px 16px',
+        display: 'flex', alignItems: 'center', gap: 6, minWidth: 300, zIndex: 10, zoom: 1.25,
       }}>
         <input
-          className="search-input"
-          type="text"
-          placeholder="Search address in St. Louis…"
+          className="search-input" type="text"
+          placeholder="Search address in St. Louis..."
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
         />
-        <button className="search-btn" type="submit">↵</button>
       </form>
 
       {searchStatus && (
         <div style={{
-          ...glass,
-          position: 'absolute',
-          top: 64,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          padding: '6px 16px',
-          fontSize: 11,
-          letterSpacing: '0.06em',
-          color: 'rgba(244,234,213,0.55)',
-          whiteSpace: 'nowrap',
-          zIndex: 10,
+          ...glass, position: 'absolute', top: 64, left: '50%',
+          transform: 'translateX(-50%)', padding: '6px 16px',
+          fontSize: 11, color: 'rgba(244,234,213,0.65)',
+          whiteSpace: 'nowrap', zIndex: 10,
         }}>
           {searchStatus}
         </div>
       )}
 
-      {/* Hovered building info panel */}
-      {hoveredBuilding && (
+      {/* Building info panel */}
+      {displayBuilding && (
         <div style={{
-          ...glass,
-          position: 'absolute',
-          top: 20,
-          right: 20,
-          width: 240,
-          padding: '18px 20px',
-          zIndex: 10,
-          animation: 'panelIn 0.2s ease-out',
+          ...glass, position: 'absolute', top: 20, right: 20,
+          width: 270, padding: '18px 20px', zIndex: 10,
+          animation: 'panelIn 0.2s ease-out', zoom: 1.25,
         }}>
-          {/* Address */}
+          {isLocked && <div className="locked-indicator">Pinned</div>}
+
           <div style={{
-            fontSize: 15,
-            fontWeight: 400,
-            color: '#f4ead5',
-            lineHeight: 1.3,
-            marginBottom: 14,
-            letterSpacing: '-0.01em',
+            fontSize: 15, color: '#f4ead5', lineHeight: 1.3,
+            marginBottom: 4, letterSpacing: '-0.01em',
+            paddingRight: isLocked ? 48 : 0,
           }}>
-            {hoveredBuilding.address || 'Unknown address'}
+            {displayBuilding.address || 'Unknown address'}
           </div>
 
-          {hoveredBuilding.neighborhood && (
-            <div style={{ marginBottom: 14, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'rgba(244,234,213,0.4)' }}>
-              {hoveredBuilding.neighborhood}
+          {displayBuilding.neighborhood && (
+            <div style={{
+              fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase',
+              color: 'rgba(244,234,213,0.4)',
+            }}>
             </div>
           )}
 
           <hr className="info-divider" />
 
-          {hoveredBuilding.yearBuilt && (
-            <div className="info-row" style={{ marginBottom: 6 }}>
-              <span className="info-label">Built</span>
-              <span className="info-value">{hoveredBuilding.yearBuilt} · {hoveredBuilding.age} yrs</span>
+          {displayBuilding.yearBuilt && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, alignItems: 'baseline' }}>
+              <InfoLabel text="Built" tipKey="built" />
+              <span className="e-info-value">
+                {displayBuilding.yearBuilt} · {THIS_YEAR - Number(displayBuilding.yearBuilt)} yrs old
+              </span>
             </div>
           )}
 
-          {hoveredBuilding.landUse && (
-            <div className="info-row" style={{ marginBottom: 6 }}>
-              <span className="info-label">Use</span>
-              <span className="info-value" style={{ fontSize: 12 }}>{hoveredBuilding.landUse}</span>
+          {displayBuilding.vacantBldgYear && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, alignItems: 'baseline' }}>
+              <InfoLabel text="Vacant since" tipKey="vacant" />
+              <span className="e-info-value" style={{ color: 'rgba(237,148,85,0.85)' }}>{displayBuilding.vacantBldgYear}</span>
             </div>
           )}
 
-          {hoveredBuilding.vacantBldgYear && (
-            <div className="info-row" style={{ marginBottom: 6 }}>
-              <span className="info-label">Vacant since</span>
-              <span className="info-value" style={{ color: 'rgba(237,148,85,0.8)' }}>{hoveredBuilding.vacantBldgYear}</span>
+          {displayBuilding.assessedImprov > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, alignItems: 'baseline' }}>
+              <InfoLabel text="Assessed" tipKey="assessed" />
+              <span className="e-info-value">${Number(displayBuilding.assessedImprov).toLocaleString()}</span>
             </div>
           )}
 
-          {hoveredBuilding.assessedImprov > 0 && (
-            <div className="info-row">
-              <span className="info-label">Assessed</span>
-              <span className="info-value">${Number(hoveredBuilding.assessedImprov).toLocaleString()}</span>
+          {isLocked && (
+            <div style={{
+              marginTop: 14, fontSize: 10, letterSpacing: '0.08em',
+              color: 'rgba(244,234,213,0.3)', textAlign: 'center', cursor: 'pointer',
+            }} onClick={() => { selectedHandleRef.current = ''; setSelectedBuilding(null); applyYearFilter(yearRangeRef.current); }}>
+              Click to unpin
             </div>
           )}
         </div>
@@ -368,20 +387,13 @@ export default function ExistenceMap() {
 
       {/* Year range slider */}
       <div style={{
-        ...glass,
-        position: 'absolute',
-        bottom: 32,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        padding: '18px 24px 20px',
-        width: 340,
-        zIndex: 10,
+        ...glass, position: 'absolute', bottom: 32, left: '50%',
+        transform: 'translateX(-50%)', padding: '18px 24px 20px',
+        width: 340, zIndex: 10, zoom: 1.25,
       }}>
         <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'baseline',
-          marginBottom: 14,
+          display: 'flex', justifyContent: 'space-between',
+          alignItems: 'baseline', marginBottom: 14,
         }}>
           <span style={{ fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'rgba(244,234,213,0.4)' }}>
             Year built
@@ -391,24 +403,14 @@ export default function ExistenceMap() {
           </span>
         </div>
 
-        {/* Dual slider track */}
         <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
-          {/* Track background */}
           <div style={{
-            position: 'absolute',
-            left: 0, right: 0,
-            height: 2,
-            background: 'rgba(244, 234, 213, 0.12)',
-            borderRadius: 1,
+            position: 'absolute', left: 0, right: 0, height: 2,
+            background: 'rgba(244, 234, 213, 0.12)', borderRadius: 1,
           }} />
-          {/* Active track fill */}
           <div style={{
-            position: 'absolute',
-            left: `${minPct}%`,
-            width: `${maxPct - minPct}%`,
-            height: 2,
-            background: 'linear-gradient(to right, #ffec9e, #ed9455)',
-            borderRadius: 1,
+            position: 'absolute', left: `${minPct}%`, width: `${maxPct - minPct}%`,
+            height: 2, background: 'linear-gradient(to right, #ffec9e, #ed9455)', borderRadius: 1,
           }} />
           <input
             type="range" className="year-slider"
@@ -424,14 +426,9 @@ export default function ExistenceMap() {
           />
         </div>
 
-        {/* Tick labels */}
         <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          marginTop: 10,
-          fontSize: 10,
-          color: 'rgba(244,234,213,0.28)',
-          letterSpacing: '0.06em',
+          display: 'flex', justifyContent: 'space-between', marginTop: 10,
+          fontSize: 10, color: 'rgba(244,234,213,0.28)', letterSpacing: '0.06em',
         }}>
           {[1810, 1860, 1910, 1960, 2026].map(y => (
             <span key={y}>{y}</span>
