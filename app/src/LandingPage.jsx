@@ -280,9 +280,7 @@ export default function LandingPage() {
             lineHeight: 1.7, margin: '0 0 14px',
             fontStyle: 'italic',
           }}>
-            98,838 parcels colored by construction date.
-            The oldest buildings glow palest — 1810 to today,
-            compressed into a single amber spectrum.
+            A heatmap color-coded by year of construction.
           </p>
           <div style={{
             fontSize: 11, letterSpacing: '0.14em',
