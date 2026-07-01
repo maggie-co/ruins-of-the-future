@@ -174,7 +174,7 @@ export default function LandingPage() {
           lineHeight: 1.6,
           margin: '16px 0 0',
         }}>
-          This site tracks the past, present, and future of 98,838 buildings in St. Louis. The first map visualizes existing data on buildings' histories. The second speculates on the city's future, compiling construction dates, land bank ownership, condemnation status, and demolition permits into a persistence risk index.
+          This site tracks the past, present, and future of 98,838 sites in St. Louis. The first map visualizes buildings' construction dates, assessed value, and vacancy status. The second map is a speculation. It compiles land bank ownership, condemnation status, and demolition permits into a persistence risk index.
           {' '}Data from the{' '}
           <a href="https://dynamic.stlouis-mo.gov/opendata/downloads.cfm" target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>
             City of St. Louis Open Data Portal
